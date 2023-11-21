@@ -1,0 +1,34 @@
+﻿@page "/"
+
+@inject ApplicationDbContext dbContext;
+
+<PageTitle>Home</PageTitle>
+
+@if (Profiles.Count == 0 && Images.Count == 0)
+{
+    <p><em>Loading...</em></p>
+}
+else
+{
+<table class="table">
+    <thead>
+        <tr>
+            <th></th>
+            <th>Filename</th>
+        </tr>
+    </thead>
+    <tbody>
+        @if (Profiles.Count > 0)
+        {
+            @for (int i = 0; i < Profiles.Count; i++)
+            {
+                <tr>
+                    <td><img src="@Images[i]" style="width: 120px; height: 120px" alt="Picture" /></td>
+                    <td>@Profiles[i].ImgFileName</td>
+                </tr>
+            }
+        }
+    </tbody>
+</table>
+}
+

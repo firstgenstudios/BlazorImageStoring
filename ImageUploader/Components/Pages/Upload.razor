@@ -1,0 +1,160 @@
+﻿@page "/upload"
+@rendermode InteractiveServer
+
+@inject ApplicationDbContext dbContext
+@inject ILogger<Upload> Logger
+@inject IWebHostEnvironment env
+
+<PageTitle>Upload</PageTitle>
+
+<h3>Upload Image</h3>
+
+<p>
+    <div class="@AlertClass" role="alert">
+        @AlertMessage
+    </div>
+</p>
+
+<div class="progress mb-3" style="height: 20px;">
+    <div class="progress-bar" role="progressbar" style="width: @ProgressPercentage%;" aria-valuenow="@ProgressPercentage" aria-valuemin="0" aria-valuemax="100">@ProgressPercentage% Complete</div>
+</div>
+
+<p>
+    <label>
+        Upload up to @maxAllowedFiles file:
+        <InputFile OnChange="@LoadFile" accept=".jpg" multiple />
+    </label>
+</p>
+
+@if (isLoading)
+{
+    <p>Uploading...</p>
+}
+else
+{
+    @if (selectedFile != null)
+    {
+        <ul>
+            <li>
+                <ul>
+                    <li>Name: @selectedFile!.Name</li>
+                    <li>Last modified: @selectedFile.LastModified.ToString()</li>
+                    <li>Size (bytes): @selectedFile.Size</li>
+                    <li>Content type: @selectedFile.ContentType</li>
+                </ul>
+            </li>
+        </ul>
+    }
+}
+
+<p>
+    @message
+</p>
+
+@code {
+    public Profile ProfileData { get; set; } = new Profile();
+    private IBrowserFile? selectedFile;
+    private int maxAllowedFiles = 1;
+    int ProgressPercentage = 0;
+    private bool isLoading;
+    private string? message;
+    MarkupString AlertMessage = new MarkupString("<strong>No file selected</strong>");
+    string[] allowedExtensions = { ".jpg" };
+    string AlertClass = "alert alert-info";
+    long maxFileSize = 1024L * 1024L * 1024L * 2L;
+
+    private async Task LoadFile(InputFileChangeEventArgs e)
+    {
+        selectedFile = e.File;
+
+        ProgressPercentage = 0;
+        isLoading = true;
+        message = string.Empty;
+
+        if (selectedFile.Size > maxFileSize)
+        {
+            SetAlert("alert alert-danger", "oi oi-ban", $"File size exceeds the limit. Maximum allowed size is <strong>{maxFileSize / (1024 * 1024)} MB</strong>.");
+            return;
+        }
+
+        if (!allowedExtensions.Contains(Path.GetExtension(selectedFile.Name).ToLowerInvariant()))
+        {
+            SetAlert("alert alert-danger", "oi oi-warning", $"Invalid file type. Allowed file types are <strong>{string.Join(", ", allowedExtensions)}</strong>.");
+            return;
+        }
+
+        if (e.FileCount > maxAllowedFiles)
+        {
+            message = $"Try again with no more than {maxAllowedFiles} file.";
+        }
+        else
+        {
+            Stream stream = selectedFile.OpenReadStream(maxFileSize);
+            var path = $"{env.WebRootPath}\\images\\{selectedFile.Name}";
+            using FileStream fs = File.Create(path);
+
+            // Set buffer size to 512 KB.
+            int bufferSize = 512 * 1024;
+            byte[] buffer = System.Buffers.ArrayPool<byte>.Shared.Rent(bufferSize);
+            int bytesRead;
+            long totalBytesRead = 0;
+            long fileSize = selectedFile.Size;
+
+            // Use a timer to update the UI every few hundred milliseconds.
+            using var timer = new Timer(_ => InvokeAsync(() => StateHasChanged()));
+            timer.Change(TimeSpan.FromMilliseconds(500), TimeSpan.FromMilliseconds(500));
+
+            try
+            {
+                while ((bytesRead = await stream.ReadAsync(buffer)) != 0)
+                {
+                    totalBytesRead += bytesRead;
+                    ProgressPercentage = (int)(100 * totalBytesRead / fileSize);
+                    await fs.WriteAsync(buffer, 0, bytesRead);
+                }
+            }
+            finally
+            {
+                stream.Close();
+                fs.Close();
+                System.Buffers.ArrayPool<byte>.Shared.Return(buffer);
+            }
+
+            // Stop the timer and update the UI with the final progress.
+            timer.Change(Timeout.Infinite, Timeout.Infinite);
+            ProgressPercentage = 100;
+            SetAlert("alert alert-success", "oi oi-check", $"<strong>{selectedFile.Name}</strong> ({selectedFile.Size} bytes) file uploaded on server.");
+            this.StateHasChanged();
+
+            try
+            {
+                using (FileStream dataFs = new FileStream(path, FileMode.Open, FileAccess.Read))
+                {
+                    using (BinaryReader br = new BinaryReader(dataFs))
+                    {
+
+                        var bytes = br.ReadBytes((int)selectedFile.Size);
+
+                        ProfileData.ImgData = Convert.ToBase64String(bytes, 0, bytes.Length);
+                        ProfileData.ImgFileName = selectedFile.Name;
+                    }
+                }
+                await dbContext.AddAsync(ProfileData);
+                await dbContext.SaveChangesAsync();
+            }
+            catch (Exception ex)
+            {
+                Logger.LogError("File: {Filename} Error: {Error}",
+                    selectedFile.Name, ex.Message);
+                message = "Upload error(s). See logs for details.";
+            }
+    }
+        isLoading = false;
+    }
+
+    private void SetAlert(string alertClass, string iconClass, string message)
+    {
+        AlertClass = alertClass;
+        AlertMessage = new MarkupString($"<span class='{iconClass}' aria-hidden='true'></span> {message}");
+    }
+}
